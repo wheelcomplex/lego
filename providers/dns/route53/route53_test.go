@@ -4,36 +4,32 @@ import (
 	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/route53"
+	"github.com/go-acme/lego/v4/platform/tester"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-var (
-	route53Secret string
-	route53Key    string
-	route53Region string
-	route53Zone   string
-)
+const envDomain = "R53_DOMAIN"
 
-func init() {
-	route53Key = os.Getenv("AWS_ACCESS_KEY_ID")
-	route53Secret = os.Getenv("AWS_SECRET_ACCESS_KEY")
-	route53Region = os.Getenv("AWS_REGION")
-	route53Zone = os.Getenv("AWS_HOSTED_ZONE_ID")
-}
+var envTest = tester.NewEnvTest(
+	EnvAccessKeyID,
+	EnvSecretAccessKey,
+	EnvRegion,
+	EnvHostedZoneID,
+	EnvMaxRetries,
+	EnvTTL,
+	EnvPropagationTimeout,
+	EnvPollingInterval).
+	WithDomain(envDomain).
+	WithLiveTestRequirements(EnvAccessKeyID, EnvSecretAccessKey, EnvRegion, envDomain)
 
-func restoreEnv() {
-	os.Setenv("AWS_ACCESS_KEY_ID", route53Key)
-	os.Setenv("AWS_SECRET_ACCESS_KEY", route53Secret)
-	os.Setenv("AWS_REGION", route53Region)
-	os.Setenv("AWS_HOSTED_ZONE_ID", route53Zone)
-}
-
-func makeRoute53Provider(ts *httptest.Server) *DNSProvider {
+func makeTestProvider(ts *httptest.Server) *DNSProvider {
 	config := &aws.Config{
 		Credentials: credentials.NewStaticCredentials("abc", "123", " "),
 		Endpoint:    aws.String(ts.URL),
@@ -41,64 +37,143 @@ func makeRoute53Provider(ts *httptest.Server) *DNSProvider {
 		MaxRetries:  aws.Int(1),
 	}
 
-	client := route53.New(session.New(config))
+	sess, err := session.NewSession(config)
+	if err != nil {
+		panic(err)
+	}
+	client := route53.New(sess)
 	cfg := NewDefaultConfig()
 	return &DNSProvider{client: client, config: cfg}
 }
 
-func TestCredentialsFromEnv(t *testing.T) {
-	defer restoreEnv()
-	os.Setenv("AWS_ACCESS_KEY_ID", "123")
-	os.Setenv("AWS_SECRET_ACCESS_KEY", "123")
-	os.Setenv("AWS_REGION", "us-east-1")
+func Test_loadCredentials_FromEnv(t *testing.T) {
+	defer envTest.RestoreEnv()
+	envTest.ClearEnv()
+
+	os.Setenv(EnvAccessKeyID, "123")
+	os.Setenv(EnvSecretAccessKey, "456")
+	os.Setenv(EnvRegion, "us-east-1")
 
 	config := &aws.Config{
 		CredentialsChainVerboseErrors: aws.Bool(true),
 	}
 
-	sess := session.New(config)
-	_, err := sess.Config.Credentials.Get()
-	assert.NoError(t, err, "Expected credentials to be set from environment")
+	sess, err := session.NewSession(config)
+	require.NoError(t, err)
+
+	value, err := sess.Config.Credentials.Get()
+	require.NoError(t, err, "Expected credentials to be set from environment")
+
+	expected := credentials.Value{
+		AccessKeyID:     "123",
+		SecretAccessKey: "456",
+		SessionToken:    "",
+		ProviderName:    "EnvConfigCredentials",
+	}
+	assert.Equal(t, expected, value)
 }
 
-func TestRegionFromEnv(t *testing.T) {
-	defer restoreEnv()
-	os.Setenv("AWS_REGION", "us-east-1")
+func Test_loadRegion_FromEnv(t *testing.T) {
+	defer envTest.RestoreEnv()
+	envTest.ClearEnv()
 
-	sess := session.New(aws.NewConfig())
-	assert.Equal(t, "us-east-1", aws.StringValue(sess.Config.Region), "Expected Region to be set from environment")
+	os.Setenv(EnvRegion, route53.CloudWatchRegionUsEast1)
+
+	sess, err := session.NewSession(aws.NewConfig())
+	require.NoError(t, err)
+
+	region := aws.StringValue(sess.Config.Region)
+	assert.Equal(t, route53.CloudWatchRegionUsEast1, region, "Region")
 }
 
-func TestHostedZoneIDFromEnv(t *testing.T) {
-	defer restoreEnv()
+func Test_getHostedZoneID_FromEnv(t *testing.T) {
+	defer envTest.RestoreEnv()
+	envTest.ClearEnv()
 
-	const testZoneID = "testzoneid"
-	os.Setenv("AWS_HOSTED_ZONE_ID", testZoneID)
+	expectedZoneID := "zoneID"
+
+	os.Setenv(EnvHostedZoneID, expectedZoneID)
 
 	provider, err := NewDNSProvider()
-	assert.NoError(t, err, "Expected no error constructing DNSProvider")
+	require.NoError(t, err)
 
-	fqdn, err := provider.getHostedZoneID("whatever")
-	assert.NoError(t, err, "Expected FQDN to be resolved to environment variable value")
+	hostedZoneID, err := provider.getHostedZoneID("whatever")
+	require.NoError(t, err, "HostedZoneID")
 
-	assert.Equal(t, testZoneID, fqdn)
+	assert.Equal(t, expectedZoneID, hostedZoneID)
 }
 
-func TestRoute53Present(t *testing.T) {
+func TestNewDefaultConfig(t *testing.T) {
+	defer envTest.RestoreEnv()
+
+	testCases := []struct {
+		desc     string
+		envVars  map[string]string
+		expected *Config
+	}{
+		{
+			desc: "default configuration",
+			expected: &Config{
+				MaxRetries:         5,
+				TTL:                10,
+				PropagationTimeout: 2 * time.Minute,
+				PollingInterval:    4 * time.Second,
+			},
+		},
+		{
+			desc: "",
+			envVars: map[string]string{
+				EnvMaxRetries:         "10",
+				EnvTTL:                "99",
+				EnvPropagationTimeout: "60",
+				EnvPollingInterval:    "60",
+				EnvHostedZoneID:       "abc123",
+			},
+			expected: &Config{
+				MaxRetries:         10,
+				TTL:                99,
+				PropagationTimeout: 60 * time.Second,
+				PollingInterval:    60 * time.Second,
+				HostedZoneID:       "abc123",
+			},
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			envTest.ClearEnv()
+			for key, value := range test.envVars {
+				os.Setenv(key, value)
+			}
+
+			config := NewDefaultConfig()
+
+			assert.Equal(t, test.expected, config)
+		})
+	}
+}
+
+func TestDNSProvider_Present(t *testing.T) {
 	mockResponses := MockResponseMap{
-		"/2013-04-01/hostedzonesbyname":         MockResponse{StatusCode: 200, Body: ListHostedZonesByNameResponse},
-		"/2013-04-01/hostedzone/ABCDEFG/rrset/": MockResponse{StatusCode: 200, Body: ChangeResourceRecordSetsResponse},
-		"/2013-04-01/change/123456":             MockResponse{StatusCode: 200, Body: GetChangeResponse},
+		"/2013-04-01/hostedzonesbyname":         {StatusCode: 200, Body: ListHostedZonesByNameResponse},
+		"/2013-04-01/hostedzone/ABCDEFG/rrset/": {StatusCode: 200, Body: ChangeResourceRecordSetsResponse},
+		"/2013-04-01/change/123456":             {StatusCode: 200, Body: GetChangeResponse},
+		"/2013-04-01/hostedzone/ABCDEFG/rrset?name=_acme-challenge.example.com.&type=TXT": {
+			StatusCode: 200,
+			Body:       "",
+		},
 	}
 
 	ts := newMockServer(t, mockResponses)
 	defer ts.Close()
 
-	provider := makeRoute53Provider(ts)
+	defer envTest.RestoreEnv()
+	envTest.ClearEnv()
+	provider := makeTestProvider(ts)
 
 	domain := "example.com"
 	keyAuth := "123456d=="
 
 	err := provider.Present(domain, "", keyAuth)
-	assert.NoError(t, err, "Expected Present to return no error")
+	require.NoError(t, err, "Expected Present to return no error")
 }

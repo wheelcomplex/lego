@@ -1,224 +1,193 @@
-// Package cloudflare implements a DNS provider for solving the DNS-01
-// challenge using cloudflare DNS.
+// Package cloudflare implements a DNS provider for solving the DNS-01 challenge using cloudflare DNS.
 package cloudflare
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"io/ioutil"
 	"net/http"
+	"sync"
 	"time"
 
-	"github.com/xenolf/lego/acme"
-	"github.com/xenolf/lego/platform/config/env"
+	cloudflare "github.com/cloudflare/cloudflare-go"
+	"github.com/go-acme/lego/v4/challenge/dns01"
+	"github.com/go-acme/lego/v4/log"
+	"github.com/go-acme/lego/v4/platform/config/env"
 )
 
-// CloudFlareAPIURL represents the API endpoint to call.
-// TODO: Unexport?
-const CloudFlareAPIURL = "https://api.cloudflare.com/client/v4"
+const (
+	minTTL = 120
+)
 
-// DNSProvider is an implementation of the acme.ChallengeProvider interface
-type DNSProvider struct {
-	authEmail string
-	authKey   string
-	client    *http.Client
+// Config is used to configure the creation of the DNSProvider.
+type Config struct {
+	AuthEmail string
+	AuthKey   string
+
+	AuthToken string
+	ZoneToken string
+
+	TTL                int
+	PropagationTimeout time.Duration
+	PollingInterval    time.Duration
+	HTTPClient         *http.Client
 }
 
-// NewDNSProvider returns a DNSProvider instance configured for cloudflare.
-// Credentials must be passed in the environment variables: CLOUDFLARE_EMAIL
-// and CLOUDFLARE_API_KEY.
+// NewDefaultConfig returns a default configuration for the DNSProvider.
+func NewDefaultConfig() *Config {
+	return &Config{
+		TTL:                env.GetOrDefaultInt("CLOUDFLARE_TTL", minTTL),
+		PropagationTimeout: env.GetOrDefaultSecond("CLOUDFLARE_PROPAGATION_TIMEOUT", 2*time.Minute),
+		PollingInterval:    env.GetOrDefaultSecond("CLOUDFLARE_POLLING_INTERVAL", 2*time.Second),
+		HTTPClient: &http.Client{
+			Timeout: env.GetOrDefaultSecond("CLOUDFLARE_HTTP_TIMEOUT", 30*time.Second),
+		},
+	}
+}
+
+// DNSProvider implements the challenge.Provider interface.
+type DNSProvider struct {
+	client *metaClient
+	config *Config
+
+	recordIDs   map[string]string
+	recordIDsMu sync.Mutex
+}
+
+// NewDNSProvider returns a DNSProvider instance configured for Cloudflare.
+// Credentials must be passed in as environment variables:
+//
+// Either provide CLOUDFLARE_EMAIL and CLOUDFLARE_API_KEY,
+// or a CLOUDFLARE_DNS_API_TOKEN.
+//
+// For a more paranoid setup, provide CLOUDFLARE_DNS_API_TOKEN and CLOUDFLARE_ZONE_API_TOKEN.
+//
+// The email and API key should be avoided, if possible.
+// Instead setup a API token with both Zone:Read and DNS:Edit permission, and pass the CLOUDFLARE_DNS_API_TOKEN environment variable.
+// You can split the Zone:Read and DNS:Edit permissions across multiple API tokens:
+// in this case pass both CLOUDFLARE_ZONE_API_TOKEN and CLOUDFLARE_DNS_API_TOKEN accordingly.
 func NewDNSProvider() (*DNSProvider, error) {
-	values, err := env.Get("CLOUDFLARE_EMAIL", "CLOUDFLARE_API_KEY")
+	values, err := env.GetWithFallback(
+		[]string{"CLOUDFLARE_EMAIL", "CF_API_EMAIL"},
+		[]string{"CLOUDFLARE_API_KEY", "CF_API_KEY"},
+	)
 	if err != nil {
-		return nil, fmt.Errorf("CloudFlare: %v", err)
+		var errT error
+		values, errT = env.GetWithFallback(
+			[]string{"CLOUDFLARE_DNS_API_TOKEN", "CF_DNS_API_TOKEN"},
+			[]string{"CLOUDFLARE_ZONE_API_TOKEN", "CF_ZONE_API_TOKEN", "CLOUDFLARE_DNS_API_TOKEN", "CF_DNS_API_TOKEN"},
+		)
+		if errT != nil {
+			return nil, fmt.Errorf("cloudflare: %v or %v", err, errT)
+		}
 	}
 
-	return NewDNSProviderCredentials(values["CLOUDFLARE_EMAIL"], values["CLOUDFLARE_API_KEY"])
+	config := NewDefaultConfig()
+	config.AuthEmail = values["CLOUDFLARE_EMAIL"]
+	config.AuthKey = values["CLOUDFLARE_API_KEY"]
+	config.AuthToken = values["CLOUDFLARE_DNS_API_TOKEN"]
+	config.ZoneToken = values["CLOUDFLARE_ZONE_API_TOKEN"]
+
+	return NewDNSProviderConfig(config)
 }
 
-// NewDNSProviderCredentials uses the supplied credentials to return a
-// DNSProvider instance configured for cloudflare.
-func NewDNSProviderCredentials(email, key string) (*DNSProvider, error) {
-	if email == "" || key == "" {
-		return nil, errors.New("CloudFlare: some credentials information are missing")
+// NewDNSProviderConfig return a DNSProvider instance configured for Cloudflare.
+func NewDNSProviderConfig(config *Config) (*DNSProvider, error) {
+	if config == nil {
+		return nil, errors.New("cloudflare: the configuration of the DNS provider is nil")
+	}
+
+	if config.TTL < minTTL {
+		return nil, fmt.Errorf("cloudflare: invalid TTL, TTL (%d) must be greater than %d", config.TTL, minTTL)
+	}
+
+	client, err := newClient(config)
+	if err != nil {
+		return nil, fmt.Errorf("cloudflare: %w", err)
 	}
 
 	return &DNSProvider{
-		authEmail: email,
-		authKey:   key,
-		client:    &http.Client{Timeout: 30 * time.Second},
+		client:    client,
+		config:    config,
+		recordIDs: make(map[string]string),
 	}, nil
 }
 
-// Timeout returns the timeout and interval to use when checking for DNS
-// propagation. Adjusting here to cope with spikes in propagation times.
+// Timeout returns the timeout and interval to use when checking for DNS propagation.
+// Adjusting here to cope with spikes in propagation times.
 func (d *DNSProvider) Timeout() (timeout, interval time.Duration) {
-	return 120 * time.Second, 2 * time.Second
+	return d.config.PropagationTimeout, d.config.PollingInterval
 }
 
-// Present creates a TXT record to fulfil the dns-01 challenge
+// Present creates a TXT record to fulfill the dns-01 challenge.
 func (d *DNSProvider) Present(domain, token, keyAuth string) error {
-	fqdn, value, ttl := acme.DNS01Record(domain, keyAuth)
-	zoneID, err := d.getHostedZoneID(fqdn)
+	fqdn, value := dns01.GetRecord(domain, keyAuth)
+
+	authZone, err := dns01.FindZoneByFqdn(fqdn)
 	if err != nil {
-		return err
+		return fmt.Errorf("cloudflare: %w", err)
 	}
 
-	rec := cloudFlareRecord{
+	zoneID, err := d.client.ZoneIDByName(authZone)
+	if err != nil {
+		return fmt.Errorf("cloudflare: failed to find zone %s: %w", authZone, err)
+	}
+
+	dnsRecord := cloudflare.DNSRecord{
 		Type:    "TXT",
-		Name:    acme.UnFqdn(fqdn),
+		Name:    dns01.UnFqdn(fqdn),
 		Content: value,
-		TTL:     ttl,
+		TTL:     d.config.TTL,
 	}
 
-	body, err := json.Marshal(rec)
+	response, err := d.client.CreateDNSRecord(zoneID, dnsRecord)
 	if err != nil {
-		return err
+		return fmt.Errorf("cloudflare: failed to create TXT record: %w", err)
 	}
 
-	_, err = d.doRequest(http.MethodPost, fmt.Sprintf("/zones/%s/dns_records", zoneID), bytes.NewReader(body))
-	return err
+	if !response.Success {
+		return fmt.Errorf("cloudflare: failed to create TXT record: %+v %+v", response.Errors, response.Messages)
+	}
+
+	d.recordIDsMu.Lock()
+	d.recordIDs[token] = response.Result.ID
+	d.recordIDsMu.Unlock()
+
+	log.Infof("cloudflare: new record for %s, ID %s", domain, response.Result.ID)
+
+	return nil
 }
 
-// CleanUp removes the TXT record matching the specified parameters
+// CleanUp removes the TXT record matching the specified parameters.
 func (d *DNSProvider) CleanUp(domain, token, keyAuth string) error {
-	fqdn, _, _ := acme.DNS01Record(domain, keyAuth)
+	fqdn, _ := dns01.GetRecord(domain, keyAuth)
 
-	record, err := d.findTxtRecord(fqdn)
+	authZone, err := dns01.FindZoneByFqdn(fqdn)
 	if err != nil {
-		return err
+		return fmt.Errorf("cloudflare: %w", err)
 	}
 
-	_, err = d.doRequest(http.MethodDelete, fmt.Sprintf("/zones/%s/dns_records/%s", record.ZoneID, record.ID), nil)
-	return err
-}
-
-func (d *DNSProvider) getHostedZoneID(fqdn string) (string, error) {
-	// HostedZone represents a CloudFlare DNS zone
-	type HostedZone struct {
-		ID   string `json:"id"`
-		Name string `json:"name"`
-	}
-
-	authZone, err := acme.FindZoneByFqdn(fqdn, acme.RecursiveNameservers)
+	zoneID, err := d.client.ZoneIDByName(authZone)
 	if err != nil {
-		return "", err
+		return fmt.Errorf("cloudflare: failed to find zone %s: %w", authZone, err)
 	}
 
-	result, err := d.doRequest(http.MethodGet, "/zones?name="+acme.UnFqdn(authZone), nil)
+	// get the record's unique ID from when we created it
+	d.recordIDsMu.Lock()
+	recordID, ok := d.recordIDs[token]
+	d.recordIDsMu.Unlock()
+	if !ok {
+		return fmt.Errorf("cloudflare: unknown record ID for '%s'", fqdn)
+	}
+
+	err = d.client.DeleteDNSRecord(zoneID, recordID)
 	if err != nil {
-		return "", err
+		log.Printf("cloudflare: failed to delete TXT record: %w", err)
 	}
 
-	var hostedZone []HostedZone
-	err = json.Unmarshal(result, &hostedZone)
-	if err != nil {
-		return "", err
-	}
+	// Delete record ID from map
+	d.recordIDsMu.Lock()
+	delete(d.recordIDs, token)
+	d.recordIDsMu.Unlock()
 
-	if len(hostedZone) != 1 {
-		return "", fmt.Errorf("zone %s not found in CloudFlare for domain %s", authZone, fqdn)
-	}
-
-	return hostedZone[0].ID, nil
-}
-
-func (d *DNSProvider) findTxtRecord(fqdn string) (*cloudFlareRecord, error) {
-	zoneID, err := d.getHostedZoneID(fqdn)
-	if err != nil {
-		return nil, err
-	}
-
-	result, err := d.doRequest(
-		http.MethodGet,
-		fmt.Sprintf("/zones/%s/dns_records?per_page=1000&type=TXT&name=%s", zoneID, acme.UnFqdn(fqdn)),
-		nil,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	var records []cloudFlareRecord
-	err = json.Unmarshal(result, &records)
-	if err != nil {
-		return nil, err
-	}
-
-	for _, rec := range records {
-		if rec.Name == acme.UnFqdn(fqdn) {
-			return &rec, nil
-		}
-	}
-
-	return nil, fmt.Errorf("no existing record found for %s", fqdn)
-}
-
-func (d *DNSProvider) doRequest(method, uri string, body io.Reader) (json.RawMessage, error) {
-	req, err := http.NewRequest(method, fmt.Sprintf("%s%s", CloudFlareAPIURL, uri), body)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Set("X-Auth-Email", d.authEmail)
-	req.Header.Set("X-Auth-Key", d.authKey)
-
-	resp, err := d.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("error querying Cloudflare API -> %v", err)
-	}
-
-	defer resp.Body.Close()
-
-	var r APIResponse
-	err = json.NewDecoder(resp.Body).Decode(&r)
-	if err != nil {
-		return nil, err
-	}
-
-	if !r.Success {
-		if len(r.Errors) > 0 {
-			errStr := ""
-			for _, apiErr := range r.Errors {
-				errStr += fmt.Sprintf("\t Error: %d: %s", apiErr.Code, apiErr.Message)
-				for _, chainErr := range apiErr.ErrorChain {
-					errStr += fmt.Sprintf("<- %d: %s", chainErr.Code, chainErr.Message)
-				}
-			}
-			return nil, fmt.Errorf("Cloudflare API Error \n%s", errStr)
-		}
-		strBody := "Unreadable body"
-		if body, err := ioutil.ReadAll(resp.Body); err == nil {
-			strBody = string(body)
-		}
-		return nil, fmt.Errorf("Cloudflare API error: the request %s sent a response with a body which is not in JSON format: %s", req.URL.String(), strBody)
-	}
-
-	return r.Result, nil
-}
-
-// APIError contains error details for failed requests
-type APIError struct {
-	Code       int        `json:"code,omitempty"`
-	Message    string     `json:"message,omitempty"`
-	ErrorChain []APIError `json:"error_chain,omitempty"`
-}
-
-// APIResponse represents a response from CloudFlare API
-type APIResponse struct {
-	Success bool            `json:"success"`
-	Errors  []*APIError     `json:"errors"`
-	Result  json.RawMessage `json:"result"`
-}
-
-// cloudFlareRecord represents a CloudFlare DNS record
-type cloudFlareRecord struct {
-	Name    string `json:"name"`
-	Type    string `json:"type"`
-	Content string `json:"content"`
-	ID      string `json:"id,omitempty"`
-	TTL     int    `json:"ttl,omitempty"`
-	ZoneID  string `json:"zone_id,omitempty"`
+	return nil
 }

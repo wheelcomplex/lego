@@ -1,81 +1,116 @@
-// Package glesys implements a DNS provider for solving the DNS-01
-// challenge using GleSYS api.
+// Package glesys implements a DNS provider for solving the DNS-01 challenge using GleSYS api.
 package glesys
 
 import (
-	"bytes"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/xenolf/lego/acme"
-	"github.com/xenolf/lego/log"
-	"github.com/xenolf/lego/platform/config/env"
+	"github.com/go-acme/lego/v4/challenge/dns01"
+	"github.com/go-acme/lego/v4/platform/config/env"
 )
 
-// GleSYS API reference: https://github.com/GleSYS/API/wiki/API-Documentation
+const (
+	// defaultBaseURL is the GleSYS API endpoint used by Present and CleanUp.
+	defaultBaseURL = "https://api.glesys.com/domain"
+	minTTL         = 60
+)
 
-// domainAPI is the GleSYS API endpoint used by Present and CleanUp.
-const domainAPI = "https://api.glesys.com/domain"
+// Environment variables names.
+const (
+	envNamespace = "GLESYS_"
 
-// DNSProvider is an implementation of the
-// acme.ChallengeProviderTimeout interface that uses GleSYS
-// API to manage TXT records for a domain.
+	EnvAPIUser = envNamespace + "API_USER"
+	EnvAPIKey  = envNamespace + "API_KEY"
+
+	EnvTTL                = envNamespace + "TTL"
+	EnvPropagationTimeout = envNamespace + "PROPAGATION_TIMEOUT"
+	EnvPollingInterval    = envNamespace + "POLLING_INTERVAL"
+	EnvHTTPTimeout        = envNamespace + "HTTP_TIMEOUT"
+)
+
+// Config is used to configure the creation of the DNSProvider.
+type Config struct {
+	APIUser            string
+	APIKey             string
+	PropagationTimeout time.Duration
+	PollingInterval    time.Duration
+	TTL                int
+	HTTPClient         *http.Client
+}
+
+// NewDefaultConfig returns a default configuration for the DNSProvider.
+func NewDefaultConfig() *Config {
+	return &Config{
+		TTL:                env.GetOrDefaultInt(EnvTTL, minTTL),
+		PropagationTimeout: env.GetOrDefaultSecond(EnvPropagationTimeout, 20*time.Minute),
+		PollingInterval:    env.GetOrDefaultSecond(EnvPollingInterval, 20*time.Second),
+		HTTPClient: &http.Client{
+			Timeout: env.GetOrDefaultSecond(EnvHTTPTimeout, 10*time.Second),
+		},
+	}
+}
+
+// DNSProvider implements the challenge.Provider interface.
 type DNSProvider struct {
-	apiUser       string
-	apiKey        string
+	config        *Config
 	activeRecords map[string]int
 	inProgressMu  sync.Mutex
-	client        *http.Client
 }
 
 // NewDNSProvider returns a DNSProvider instance configured for GleSYS.
-// Credentials must be passed in the environment variables: GLESYS_API_USER
-// and GLESYS_API_KEY.
+// Credentials must be passed in the environment variables:
+// GLESYS_API_USER and GLESYS_API_KEY.
 func NewDNSProvider() (*DNSProvider, error) {
-	values, err := env.Get("GLESYS_API_USER", "GLESYS_API_KEY")
+	values, err := env.Get(EnvAPIUser, EnvAPIKey)
 	if err != nil {
-		return nil, fmt.Errorf("GleSYS DNS: %v", err)
+		return nil, fmt.Errorf("glesys: %w", err)
 	}
 
-	return NewDNSProviderCredentials(values["GLESYS_API_USER"], values["GLESYS_API_KEY"])
+	config := NewDefaultConfig()
+	config.APIUser = values[EnvAPIUser]
+	config.APIKey = values[EnvAPIKey]
+
+	return NewDNSProviderConfig(config)
 }
 
-// NewDNSProviderCredentials uses the supplied credentials to return a
-// DNSProvider instance configured for GleSYS.
-func NewDNSProviderCredentials(apiUser string, apiKey string) (*DNSProvider, error) {
-	if apiUser == "" || apiKey == "" {
-		return nil, fmt.Errorf("GleSYS DNS: Incomplete credentials provided")
+// NewDNSProviderConfig return a DNSProvider instance configured for GleSYS.
+func NewDNSProviderConfig(config *Config) (*DNSProvider, error) {
+	if config == nil {
+		return nil, errors.New("glesys: the configuration of the DNS provider is nil")
+	}
+
+	if config.APIUser == "" || config.APIKey == "" {
+		return nil, errors.New("glesys: incomplete credentials provided")
+	}
+
+	if config.TTL < minTTL {
+		return nil, fmt.Errorf("glesys: invalid TTL, TTL (%d) must be greater than %d", config.TTL, minTTL)
 	}
 
 	return &DNSProvider{
-		apiUser:       apiUser,
-		apiKey:        apiKey,
+		config:        config,
 		activeRecords: make(map[string]int),
-		client:        &http.Client{Timeout: 10 * time.Second},
 	}, nil
 }
 
 // Present creates a TXT record using the specified parameters.
 func (d *DNSProvider) Present(domain, token, keyAuth string) error {
-	fqdn, value, ttl := acme.DNS01Record(domain, keyAuth)
-	if ttl < 60 {
-		ttl = 60 // 60 is GleSYS minimum value for ttl
-	}
+	fqdn, value := dns01.GetRecord(domain, keyAuth)
+
 	// find authZone
-	authZone, err := acme.FindZoneByFqdn(fqdn, acme.RecursiveNameservers)
+	authZone, err := dns01.FindZoneByFqdn(fqdn)
 	if err != nil {
-		return fmt.Errorf("GleSYS DNS: findZoneByFqdn failure: %v", err)
+		return fmt.Errorf("glesys: findZoneByFqdn failure: %w", err)
 	}
 
 	// determine name of TXT record
 	if !strings.HasSuffix(
 		strings.ToLower(fqdn), strings.ToLower("."+authZone)) {
-		return fmt.Errorf(
-			"GleSYS DNS: unexpected authZone %s for fqdn %s", authZone, fqdn)
+		return fmt.Errorf("glesys: unexpected authZone %s for fqdn %s", authZone, fqdn)
 	}
 	name := fqdn[:len(fqdn)-len("."+authZone)]
 
@@ -85,7 +120,7 @@ func (d *DNSProvider) Present(domain, token, keyAuth string) error {
 	defer d.inProgressMu.Unlock()
 
 	// add TXT record into authZone
-	recordID, err := d.addTXTRecord(domain, acme.UnFqdn(authZone), name, value, ttl)
+	recordID, err := d.addTXTRecord(domain, dns01.UnFqdn(authZone), name, value, d.config.TTL)
 	if err != nil {
 		return err
 	}
@@ -97,7 +132,7 @@ func (d *DNSProvider) Present(domain, token, keyAuth string) error {
 
 // CleanUp removes the TXT record matching the specified parameters.
 func (d *DNSProvider) CleanUp(domain, token, keyAuth string) error {
-	fqdn, _, _ := acme.DNS01Record(domain, keyAuth)
+	fqdn, _ := dns01.GetRecord(domain, keyAuth)
 
 	// acquire lock and retrieve authZone
 	d.inProgressMu.Lock()
@@ -118,90 +153,5 @@ func (d *DNSProvider) CleanUp(domain, token, keyAuth string) error {
 // are used by the acme package as timeout and check interval values
 // when checking for DNS record propagation with GleSYS.
 func (d *DNSProvider) Timeout() (timeout, interval time.Duration) {
-	return 20 * time.Minute, 20 * time.Second
-}
-
-// types for JSON method calls, parameters, and responses
-
-type addRecordRequest struct {
-	DomainName string `json:"domainname"`
-	Host       string `json:"host"`
-	Type       string `json:"type"`
-	Data       string `json:"data"`
-	TTL        int    `json:"ttl,omitempty"`
-}
-
-type deleteRecordRequest struct {
-	RecordID int `json:"recordid"`
-}
-
-type responseStruct struct {
-	Response struct {
-		Status struct {
-			Code int `json:"code"`
-		} `json:"status"`
-		Record deleteRecordRequest `json:"record"`
-	} `json:"response"`
-}
-
-// POSTing/Marshalling/Unmarshalling
-
-func (d *DNSProvider) sendRequest(method string, resource string, payload interface{}) (*responseStruct, error) {
-	url := fmt.Sprintf("%s/%s", domainAPI, resource)
-
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest(method, url, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth(d.apiUser, d.apiKey)
-
-	resp, err := d.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("GleSYS DNS: request failed with HTTP status code %d", resp.StatusCode)
-	}
-
-	var response responseStruct
-	err = json.NewDecoder(resp.Body).Decode(&response)
-
-	return &response, err
-}
-
-// functions to perform API actions
-
-func (d *DNSProvider) addTXTRecord(fqdn string, domain string, name string, value string, ttl int) (int, error) {
-	response, err := d.sendRequest(http.MethodPost, "addrecord", addRecordRequest{
-		DomainName: domain,
-		Host:       name,
-		Type:       "TXT",
-		Data:       value,
-		TTL:        ttl,
-	})
-
-	if response != nil && response.Response.Status.Code == http.StatusOK {
-		log.Infof("[%s] GleSYS DNS: Successfully created record id %d", fqdn, response.Response.Record.RecordID)
-		return response.Response.Record.RecordID, nil
-	}
-	return 0, err
-}
-
-func (d *DNSProvider) deleteTXTRecord(fqdn string, recordid int) error {
-	response, err := d.sendRequest(http.MethodPost, "deleterecord", deleteRecordRequest{
-		RecordID: recordid,
-	})
-	if response != nil && response.Response.Status.Code == 200 {
-		log.Infof("[%s] GleSYS DNS: Successfully deleted record id %d", fqdn, recordid)
-	}
-	return err
+	return d.config.PropagationTimeout, d.config.PollingInterval
 }

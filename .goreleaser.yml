@@ -2,6 +2,15 @@ project_name: lego
 
 builds:
   - binary: lego
+
+    main: ./cmd/lego/main.go
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
     goos:
       - windows
       - darwin
@@ -14,8 +23,17 @@ builds:
       - 386
       - arm
       - arm64
+      - mips
+      - mipsle
+      - mips64
+      - mips64le
     goarm:
       - 7
+      - 6
+      - 5
+    gomips:
+      - hardfloat
+      - softfloat
 
     ignore:
       - goos: darwin
@@ -23,16 +41,16 @@ builds:
       - goos: openbsd
         goarch: arm
 
-archive:
-  name_template: '{{ .ProjectName }}_v{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ if .Arm
-    }}v{{ .Arm }}{{ end }}'
-  format: tar.gz
-  format_overrides:
-    - goos: windows
-      format: zip
-  files:
-    - LICENSE
-    - CHANGELOG.md
+archives:
+  - id: lego
+    name_template: '{{ .ProjectName }}_v{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}{{ if .Mips }}_{{ .Mips }}{{ end }}'
+    format: tar.gz
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - LICENSE
+      - CHANGELOG.md
 
 release:
   disable: true

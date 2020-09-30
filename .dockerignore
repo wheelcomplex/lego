@@ -1,9 +1,8 @@
-.git
 lego.exe
-lego
 .lego
 .gitcookies
 .idea
 .vscode/
 dist/
 builds/
+docs/

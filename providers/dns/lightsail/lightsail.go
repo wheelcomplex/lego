@@ -1,10 +1,10 @@
-// Package lightsail implements a DNS provider for solving the DNS-01 challenge
-// using AWS Lightsail DNS.
+// Package lightsail implements a DNS provider for solving the DNS-01 challenge using AWS Lightsail DNS.
 package lightsail
 
 import (
+	"errors"
+	"fmt"
 	"math/rand"
-	"os"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -12,22 +12,27 @@ import (
 	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/lightsail"
-	"github.com/xenolf/lego/acme"
+	"github.com/go-acme/lego/v4/challenge/dns01"
+	"github.com/go-acme/lego/v4/platform/config/env"
 )
 
 const (
 	maxRetries = 5
 )
 
-// DNSProvider implements the acme.ChallengeProvider interface
-type DNSProvider struct {
-	client  *lightsail.Lightsail
-	dnsZone string
-}
+// Environment variables names.
+const (
+	envNamespace = "LIGHTSAIL_"
 
-// customRetryer implements the client.Retryer interface by composing the
-// DefaultRetryer. It controls the logic for retrying recoverable request
-// errors (e.g. when rate limits are exceeded).
+	EnvRegion  = envNamespace + "LIGHTSAIL_REGION"
+	EnvDNSZone = "DNS_ZONE"
+
+	EnvPropagationTimeout = envNamespace + "PROPAGATION_TIMEOUT"
+	EnvPollingInterval    = envNamespace + "POLLING_INTERVAL"
+)
+
+// customRetryer implements the client.Retryer interface by composing the DefaultRetryer.
+// It controls the logic for retrying recoverable request errors (e.g. when rate limits are exceeded).
 type customRetryer struct {
 	client.DefaultRetryer
 }
@@ -47,13 +52,36 @@ func (c customRetryer) RetryRules(r *request.Request) time.Duration {
 	return time.Duration(delay) * time.Millisecond
 }
 
-// NewDNSProvider returns a DNSProvider instance configured for the AWS
-// Lightsail service.
+// Config is used to configure the creation of the DNSProvider.
+type Config struct {
+	DNSZone            string
+	Region             string
+	PropagationTimeout time.Duration
+	PollingInterval    time.Duration
+}
+
+// NewDefaultConfig returns a default configuration for the DNSProvider.
+func NewDefaultConfig() *Config {
+	return &Config{
+		DNSZone:            env.GetOrFile(EnvDNSZone),
+		PropagationTimeout: env.GetOrDefaultSecond(EnvPropagationTimeout, dns01.DefaultPropagationTimeout),
+		PollingInterval:    env.GetOrDefaultSecond(EnvPollingInterval, dns01.DefaultPollingInterval),
+		Region:             env.GetOrDefaultString(EnvRegion, "us-east-1"),
+	}
+}
+
+// DNSProvider implements the challenge.Provider interface.
+type DNSProvider struct {
+	client *lightsail.Lightsail
+	config *Config
+}
+
+// NewDNSProvider returns a DNSProvider instance configured for the AWS Lightsail service.
 //
 // AWS Credentials are automatically detected in the following locations
 // and prioritized in the following order:
 // 1. Environment variables: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
-//     [AWS_SESSION_TOKEN], [DNS_ZONE]
+//     [AWS_SESSION_TOKEN], [DNS_ZONE], [LIGHTSAIL_REGION]
 // 2. Shared credentials file (defaults to ~/.aws/credentials)
 // 3. Amazon EC2 IAM role
 //
@@ -61,49 +89,70 @@ func (c customRetryer) RetryRules(r *request.Request) time.Duration {
 //
 // See also: https://github.com/aws/aws-sdk-go/wiki/configuring-sdk
 func NewDNSProvider() (*DNSProvider, error) {
-	r := customRetryer{}
-	r.NumMaxRetries = maxRetries
+	return NewDNSProviderConfig(NewDefaultConfig())
+}
 
-	config := aws.NewConfig().WithRegion("us-east-1")
-	sess, err := session.NewSession(request.WithRetryer(config, r))
+// NewDNSProviderConfig return a DNSProvider instance configured for AWS Lightsail.
+func NewDNSProviderConfig(config *Config) (*DNSProvider, error) {
+	if config == nil {
+		return nil, errors.New("lightsail: the configuration of the DNS provider is nil")
+	}
+
+	retryer := customRetryer{}
+	retryer.NumMaxRetries = maxRetries
+
+	conf := aws.NewConfig().WithRegion(config.Region)
+	sess, err := session.NewSession(request.WithRetryer(conf, retryer))
 	if err != nil {
 		return nil, err
 	}
 
 	return &DNSProvider{
-		dnsZone: os.Getenv("DNS_ZONE"),
-		client:  lightsail.New(sess),
+		config: config,
+		client: lightsail.New(sess),
 	}, nil
 }
 
-// Present creates a TXT record using the specified parameters
+// Present creates a TXT record using the specified parameters.
 func (d *DNSProvider) Present(domain, token, keyAuth string) error {
-	fqdn, value, _ := acme.DNS01Record(domain, keyAuth)
-	value = `"` + value + `"`
+	fqdn, value := dns01.GetRecord(domain, keyAuth)
 
-	err := d.newTxtRecord(domain, fqdn, value)
-	return err
+	err := d.newTxtRecord(fqdn, `"`+value+`"`)
+	if err != nil {
+		return fmt.Errorf("lightsail: %w", err)
+	}
+	return nil
 }
 
-// CleanUp removes the TXT record matching the specified parameters
+// CleanUp removes the TXT record matching the specified parameters.
 func (d *DNSProvider) CleanUp(domain, token, keyAuth string) error {
-	fqdn, value, _ := acme.DNS01Record(domain, keyAuth)
-	value = `"` + value + `"`
+	fqdn, value := dns01.GetRecord(domain, keyAuth)
+
 	params := &lightsail.DeleteDomainEntryInput{
-		DomainName: aws.String(d.dnsZone),
+		DomainName: aws.String(d.config.DNSZone),
 		DomainEntry: &lightsail.DomainEntry{
 			Name:   aws.String(fqdn),
 			Type:   aws.String("TXT"),
-			Target: aws.String(value),
+			Target: aws.String(`"` + value + `"`),
 		},
 	}
+
 	_, err := d.client.DeleteDomainEntry(params)
-	return err
+	if err != nil {
+		return fmt.Errorf("lightsail: %w", err)
+	}
+	return nil
 }
 
-func (d *DNSProvider) newTxtRecord(domain string, fqdn string, value string) error {
+// Timeout returns the timeout and interval to use when checking for DNS propagation.
+// Adjusting here to cope with spikes in propagation times.
+func (d *DNSProvider) Timeout() (timeout, interval time.Duration) {
+	return d.config.PropagationTimeout, d.config.PollingInterval
+}
+
+func (d *DNSProvider) newTxtRecord(fqdn, value string) error {
 	params := &lightsail.CreateDomainEntryInput{
-		DomainName: aws.String(d.dnsZone),
+		DomainName: aws.String(d.config.DNSZone),
 		DomainEntry: &lightsail.DomainEntry{
 			Name:   aws.String(fqdn),
 			Target: aws.String(value),

@@ -1,68 +1,129 @@
-// Package namedotcom implements a DNS provider for solving the DNS-01 challenge
-// using Name.com's DNS service.
+// Package namedotcom implements a DNS provider for solving the DNS-01 challenge using Name.com's DNS service.
 package namedotcom
 
 import (
+	"errors"
 	"fmt"
-	"os"
+	"net/http"
 	"strings"
+	"time"
 
+	"github.com/go-acme/lego/v4/challenge/dns01"
+	"github.com/go-acme/lego/v4/platform/config/env"
 	"github.com/namedotcom/go/namecom"
-	"github.com/xenolf/lego/acme"
-	"github.com/xenolf/lego/platform/config/env"
 )
 
-// DNSProvider is an implementation of the acme.ChallengeProvider interface.
+// according to https://www.name.com/api-docs/DNS#CreateRecord
+const minTTL = 300
+
+// Environment variables names.
+const (
+	envNamespace = "NAMECOM_"
+
+	EnvUsername = envNamespace + "USERNAME"
+	EnvAPIToken = envNamespace + "API_TOKEN"
+	EnvServer   = envNamespace + "SERVER"
+
+	EnvTTL                = envNamespace + "TTL"
+	EnvPropagationTimeout = envNamespace + "PROPAGATION_TIMEOUT"
+	EnvPollingInterval    = envNamespace + "POLLING_INTERVAL"
+	EnvHTTPTimeout        = envNamespace + "HTTP_TIMEOUT"
+)
+
+// Config is used to configure the creation of the DNSProvider.
+type Config struct {
+	Username           string
+	APIToken           string
+	Server             string
+	TTL                int
+	PropagationTimeout time.Duration
+	PollingInterval    time.Duration
+	HTTPClient         *http.Client
+}
+
+// NewDefaultConfig returns a default configuration for the DNSProvider.
+func NewDefaultConfig() *Config {
+	return &Config{
+		TTL:                env.GetOrDefaultInt(EnvTTL, minTTL),
+		PropagationTimeout: env.GetOrDefaultSecond(EnvPropagationTimeout, 15*time.Minute),
+		PollingInterval:    env.GetOrDefaultSecond(EnvPollingInterval, 20*time.Second),
+		HTTPClient: &http.Client{
+			Timeout: env.GetOrDefaultSecond(EnvHTTPTimeout, 10*time.Second),
+		},
+	}
+}
+
+// DNSProvider implements the challenge.Provider interface.
 type DNSProvider struct {
 	client *namecom.NameCom
+	config *Config
 }
 
 // NewDNSProvider returns a DNSProvider instance configured for namedotcom.
-// Credentials must be passed in the environment variables: NAMECOM_USERNAME and NAMECOM_API_TOKEN
+// Credentials must be passed in the environment variables:
+// NAMECOM_USERNAME and NAMECOM_API_TOKEN.
 func NewDNSProvider() (*DNSProvider, error) {
-	values, err := env.Get("NAMECOM_USERNAME", "NAMECOM_API_TOKEN")
+	values, err := env.Get(EnvUsername, EnvAPIToken)
 	if err != nil {
-		return nil, fmt.Errorf("Name.com: %v", err)
+		return nil, fmt.Errorf("namedotcom: %w", err)
 	}
 
-	server := os.Getenv("NAMECOM_SERVER")
-	return NewDNSProviderCredentials(values["NAMECOM_USERNAME"], values["NAMECOM_API_TOKEN"], server)
+	config := NewDefaultConfig()
+	config.Username = values[EnvUsername]
+	config.APIToken = values[EnvAPIToken]
+	config.Server = env.GetOrFile(EnvServer)
+
+	return NewDNSProviderConfig(config)
 }
 
-// NewDNSProviderCredentials uses the supplied credentials to return a
-// DNSProvider instance configured for namedotcom.
-func NewDNSProviderCredentials(username, apiToken, server string) (*DNSProvider, error) {
-	if username == "" {
-		return nil, fmt.Errorf("Name.com Username is required")
-	}
-	if apiToken == "" {
-		return nil, fmt.Errorf("Name.com API token is required")
+// NewDNSProviderConfig return a DNSProvider instance configured for namedotcom.
+func NewDNSProviderConfig(config *Config) (*DNSProvider, error) {
+	if config == nil {
+		return nil, errors.New("namedotcom: the configuration of the DNS provider is nil")
 	}
 
-	client := namecom.New(username, apiToken)
-
-	if server != "" {
-		client.Server = server
+	if config.Username == "" {
+		return nil, errors.New("namedotcom: username is required")
 	}
 
-	return &DNSProvider{client: client}, nil
+	if config.APIToken == "" {
+		return nil, errors.New("namedotcom: API token is required")
+	}
+
+	if config.TTL < minTTL {
+		return nil, fmt.Errorf("namedotcom: invalid TTL, TTL (%d) must be greater than %d", config.TTL, minTTL)
+	}
+
+	client := namecom.New(config.Username, config.APIToken)
+	client.Client = config.HTTPClient
+
+	if config.Server != "" {
+		client.Server = config.Server
+	}
+
+	return &DNSProvider{client: client, config: config}, nil
 }
 
-// Present creates a TXT record to fulfil the dns-01 challenge.
+// Present creates a TXT record to fulfill the dns-01 challenge.
 func (d *DNSProvider) Present(domain, token, keyAuth string) error {
-	fqdn, value, ttl := acme.DNS01Record(domain, keyAuth)
+	fqdn, value := dns01.GetRecord(domain, keyAuth)
+
+	domainDetails, err := d.client.GetDomain(&namecom.GetDomainRequest{DomainName: domain})
+	if err != nil {
+		return fmt.Errorf("namedotcom API call failed: %w", err)
+	}
 
 	request := &namecom.Record{
 		DomainName: domain,
-		Host:       d.extractRecordName(fqdn, domain),
+		Host:       extractRecordName(fqdn, domainDetails.DomainName),
 		Type:       "TXT",
-		TTL:        uint32(ttl),
+		TTL:        uint32(d.config.TTL),
 		Answer:     value,
 	}
 
-	_, err := d.client.CreateRecord(request)
+	_, err = d.client.CreateRecord(request)
 	if err != nil {
-		return fmt.Errorf("Name.com API call failed: %v", err)
+		return fmt.Errorf("namedotcom: API call failed: %w", err)
 	}
 
 	return nil
@@ -70,11 +131,11 @@ func (d *DNSProvider) Present(domain, token, keyAuth string) error {
 
 // CleanUp removes the TXT record matching the specified parameters.
 func (d *DNSProvider) CleanUp(domain, token, keyAuth string) error {
-	fqdn, _, _ := acme.DNS01Record(domain, keyAuth)
+	fqdn, _ := dns01.GetRecord(domain, keyAuth)
 
 	records, err := d.getRecords(domain)
 	if err != nil {
-		return err
+		return fmt.Errorf("namedotcom: %w", err)
 	}
 
 	for _, rec := range records {
@@ -85,7 +146,7 @@ func (d *DNSProvider) CleanUp(domain, token, keyAuth string) error {
 			}
 			_, err := d.client.DeleteRecord(request)
 			if err != nil {
-				return err
+				return fmt.Errorf("namedotcom: %w", err)
 			}
 		}
 	}
@@ -93,20 +154,21 @@ func (d *DNSProvider) CleanUp(domain, token, keyAuth string) error {
 	return nil
 }
 
-func (d *DNSProvider) getRecords(domain string) ([]*namecom.Record, error) {
-	var (
-		err      error
-		records  []*namecom.Record
-		response *namecom.ListRecordsResponse
-	)
+// Timeout returns the timeout and interval to use when checking for DNS propagation.
+// Adjusting here to cope with spikes in propagation times.
+func (d *DNSProvider) Timeout() (timeout, interval time.Duration) {
+	return d.config.PropagationTimeout, d.config.PollingInterval
+}
 
+func (d *DNSProvider) getRecords(domain string) ([]*namecom.Record, error) {
 	request := &namecom.ListRecordsRequest{
 		DomainName: domain,
 		Page:       1,
 	}
 
+	var records []*namecom.Record
 	for request.Page > 0 {
-		response, err = d.client.ListRecords(request)
+		response, err := d.client.ListRecords(request)
 		if err != nil {
 			return nil, err
 		}
@@ -118,9 +180,9 @@ func (d *DNSProvider) getRecords(domain string) ([]*namecom.Record, error) {
 	return records, nil
 }
 
-func (d *DNSProvider) extractRecordName(fqdn, domain string) string {
-	name := acme.UnFqdn(fqdn)
-	if idx := strings.Index(name, "."+domain); idx != -1 {
+func extractRecordName(fqdn, zone string) string {
+	name := dns01.UnFqdn(fqdn)
+	if idx := strings.Index(name, "."+zone); idx != -1 {
 		return name[:idx]
 	}
 	return name

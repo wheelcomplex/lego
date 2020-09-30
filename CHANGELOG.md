@@ -1,5 +1,443 @@
 # Changelog
 
+## [v4.0.1] - 2020-09-03
+
+### Fixed:
+
+- **[dnsprovider]** exoscale: change dependency version.
+
+## [v4.0.0] - 2020-09-02
+
+### Added:
+
+- **[cli], [lib]** Support "alternate" certificate links for selecting different signing Chains
+
+### Changed:
+
+- **[cli]** Replaces `ec384` by `ec256` as default key-type
+- **[lib]** Changes `ObtainForCSR` method signature
+
+### Removed:
+
+- **[dnsprovider]** Replaces FastDNS by EdgeDNS
+- **[dnsprovider]** Removes old Linode provider
+- **[lib]** Removes `AddPreCheck` function
+
+## [v3.9.0] - 2020-09-01
+
+### Added:
+
+- **[dnsprovider]** Add Akamai Edgedns. Deprecate FastDNS
+- **[dnsprovider]** Add DNS provider for HyperOne
+
+### Changed:
+
+- **[dnsprovider]** designate: add support for Openstack clouds.yaml
+- **[dnsprovider]** azure: allow selecting environments
+- **[dnsprovider]** desec: applies API rate limits.
+
+### Fixed:
+
+- **[dnsprovider]** namesilo: fix cleanup.
+
+## [v3.8.0] - 2020-07-02
+
+### Added:
+
+- **[cli]** cli: add hook on the run command.
+- **[dnsprovider]** inwx: Two-Factor-Authentication
+- **[dnsprovider]** Add DNS provider for ArvanCloud
+
+### Changed:
+
+- **[dnsprovider]** vultr: bumping govultr version
+- **[dnsprovider]** desec: improve error logs.
+- **[lib]** Ensures the return of a location during account updates
+- **[dnsprovider]** route53: Document all AWS credential environment variables
+
+### Fixed:
+
+- **[dnsprovider]** stackpath: fix subdomain support.
+- **[dnsprovider]** arvandcloud: fix record name.
+- **[dnsprovider]** fix: multi-va.
+- **[dnsprovider]** constellix: fix search records API call.
+- **[dnsprovider]** hetzner: fix record name.
+- **[lib]** Registrar.ResolveAccountByKey: Fix malformed request
+
+## [v3.7.0] - 2020-05-11
+
+### Added:
+
+- **[dnsprovider]** Add DNS provider for Netlify.
+- **[dnsprovider]** Add DNS provider for deSEC.io
+- **[dnsprovider]** Add DNS provider for LuaDNS
+- **[dnsprovider]** Adding Hetzner DNS provider
+- **[dnsprovider]** Add DNS provider for Mythic beasts DNSv2
+- **[dnsprovider]** Add DNS provider for Yandex.
+
+### Changed:
+
+- **[dnsprovider]** Upgrade DNSimple client to 0.60.0
+- **[dnsprovider]** update aws sdk
+
+### Fixed:
+
+- **[dnsprovider]** autodns: removes TXT records during CleanUp.
+- **[dnsprovider]** Fix exoscale HTTP timeout
+- **[cli]** fix: renew path information.
+- **[cli]** Fix account storage location warning message
+
+## [v3.6.0] - 2020-04-24
+
+### Added:
+
+- **[dnsprovider]** Add DNS provider for CloudDNS.
+- **[dnsprovider]** alicloud: add support for domain with punycode
+- **[dnsprovider]** cloudns: Add subuser support
+- **[cli]** Information about renewed certificates are now passed to the renew hook
+
+### Changed:
+
+- **[dnsprovider]** acmedns: Update cpu/goacmedns v0.0.1 -&gt; v0.0.2
+- **[dnsprovider]** alicloud: update sdk dependency version to v1.61.112
+- **[dnsprovider]** azure: Allow for the use of MSI
+- **[dnsprovider]** constellix: improve challenge.
+- **[dnsprovider]** godaddy: allow parallel solve.
+- **[dnsprovider]** namedotcom: get the actual registered domain so we can remove just that from the hostname to be created
+- **[dnsprovider]** transip: updated the client to v6
+
+### Fixed:
+
+- **[dnsprovider]** ns1: fix missing domain in log 
+- **[dnsprovider]** rimuhosting: use HTTP client from config.
+
+## [v3.5.0] - 2020-03-15
+
+### Added:
+
+- **[dnsprovider]** Add DNS provider for Dynu.
+- **[dnsprovider]** Add DNS provider for reg.ru
+- **[dnsprovider]** Add DNS provider for Zonomi and RimuHosting.
+- **[cli]** Building binaries for arm 6 and 5
+- **[cli]** Uses CGO_ENABLED=0
+- **[cli]** Multi-arch Docker image.
+- **[cli]** Adds `--name` flag to list command.
+
+### Changed:
+
+- **[lib]** lib: Improve cleanup log messages.
+- **[lib]** Wrap errors.
+
+### Fixed:
+
+- **[dnsprovider]** azure: pass AZURE_CLIENT_SECRET_FILE to autorest.Authorizer
+- **[dnsprovider]** gcloud: fixes issues when used with GKE Workload Identity
+- **[dnsprovider]** oraclecloud: fix subdomain support
+
+## [v3.4.0] - 2020-02-25
+
+### Added:
+
+- **[dnsprovider]** Add DNS provider for Constellix
+- **[dnsprovider]** Add DNS provider for Servercow.
+- **[dnsprovider]** Add DNS provider for Scaleway
+- **[cli]** Add &#34;LEGO_PATH&#34; environment variable
+
+### Changed:
+
+- **[dnsprovider]** route53: allow custom client to be provided
+- **[dnsprovider]** namecheap: allow external domains
+- **[dnsprovider]** namecheap: add sandbox support.
+- **[dnsprovider]** ovh: Improve provider documentation
+- **[dnsprovider]** route53: Improve provider documentation
+
+### Fixed:
+
+- **[dnsprovider]** zoneee: fix subdomains.
+- **[dnsprovider]** designate: Don&#39;t clean up managed records like SOA and NS
+- **[dnsprovider]** dnspod: update lib.
+- **[lib]** crypto: Treat CommonName as optional
+- **[lib]** chore: update cenkalti/backoff to v4.
+
+## [v3.3.0] - 2020-01-08
+
+### Added:
+- **[dnsprovider]** Add DNS provider for Checkdomain
+- **[lib]** Add support to update account
+
+### Changed:
+- **[dnsprovider]** gcloud: Auto-detection of the project ID.
+- **[lib]** Successfully parse private key PEM blocks
+
+### Fixed:
+- **[dnsprovider]** Update dnspod, because of API breaking changes.
+
+## [v3.2.0] - 2019-11-10
+
+### Added:
+- **[dnsprovider]** Add support for autodns
+
+### Changed:
+- **[dnsprovider]** httpreq: Allow use environment vars from a `_FILE` file
+- **[lib]** Don&#39;t deactivate valid authorizations
+- **[lib]** Expose more SOA fields found by dns01.FindZoneByFqdn
+
+### Fixed:
+- **[dnsprovider]** use token as unique ID.
+
+## [v3.1.0] - 2019-10-07
+
+### Added:
+- **[dnsprovider]** Add DNS provider for Liquid Web
+- **[dnsprovider]** cloudflare: add support for API tokens
+- **[cli]** feat: ease operation behind proxy servers
+
+### Changed:
+- **[dnsprovider]** cloudflare: update client
+- **[dnsprovider]** linodev4: propagation timeout configuration.
+
+### Fixed:
+- **[dnsprovider]** ovh: fix int overflow.
+- **[dnsprovider]** bindman: fix client version.
+
+## [v3.0.2] - 2019-08-15
+
+### Fixed:
+- Invalid pseudo version (related to Cloudflare client).
+
+## [v3.0.1] - 2019-08-14
+
+There was a problem when creating the tag v3.0.1, this tag has been invalidate.
+
+## [v3.0.0] - 2019-08-05
+
+### Changed:
+- migrate to go module (new import github.com/go-acme/lego/v3/)
+- update DNS clients
+
+## [v2.7.2] - 2019-07-30
+
+### Fixed:
+- **[dnsprovider]** vultr: quote TXT record
+
+## [v2.7.1] - 2019-07-22
+
+### Fixed:
+- **[dnsprovider]** vultr: invalid record type.
+
+## [v2.7.0] - 2019-07-17
+
+### Added:
+- **[dnsprovider]** Add DNS provider for namesilo
+- **[dnsprovider]** Add DNS provider for versio.nl
+
+### Changed:
+- **[dnsprovider]** Update DNS providers libs.
+- **[dnsprovider]** joker: support username and password.
+- **[dnsprovider]** Vultr: Switch to official client
+
+### Fixed:
+- **[dnsprovider]** otc: Prevent sending empty body.
+
+## [v2.6.0] - 2019-05-27
+
+### Added:
+- **[dnsprovider]** Add support for Joker.com DMAPI
+- **[dnsprovider]** Add support for Bindman DNS provider
+- **[dnsprovider]** Add support for EasyDNS
+- **[lib]** Get an existing certificate by URL
+
+### Changed:
+- **[dnsprovider]** digitalocean: LEGO_EXPERIMENTAL_CNAME_SUPPORT support
+- **[dnsprovider]** gcloud: Use fqdn to get zone Present/CleanUp
+- **[dnsprovider]** exec: serial behavior
+- **[dnsprovider]** manual: serial behavior.
+- **[dnsprovider]** Strip newlines when reading environment variables from `_FILE` suffixed files.
+
+### Fixed:
+- **[cli]** fix: cli disable-cp option.
+- **[dnsprovider]** gcloud: fix zone visibility.
+
+## [v2.5.0] - 2019-04-17
+
+### Added:
+- **[cli]** Adds renew hook
+- **[dnsprovider]** Adds 'Since' to DNS providers documentation
+
+### Changed:
+- **[dnsprovider]** gcloud: use public DNS zones
+- **[dnsprovider]** route53: enhance documentation.
+
+### Fixed:
+- **[dnsprovider]** cloudns: fix TTL and status validation
+- **[dnsprovider]** sakuracloud: supports concurrent update
+- **[dnsprovider]** Disable authz when solve fail.
+- Add tzdata to the Docker image.
+
+## [v2.4.0] - 2019-03-25
+
+- Migrate from xenolf/lego to go-acme/lego.
+
+### Added:
+- **[dnsprovider]** Add DNS Provider for Domain Offensive (do.de)
+- **[dnsprovider]** Adds information about '_FILE' suffix.
+
+### Fixed:
+- **[cli,dnsprovider]** Add 'manual' provider to the output of dnshelp
+- **[dnsprovider]** hostingde: Use provided ZoneName instead of domain
+- **[dnsprovider]** pdns: fix wildcard with SANs
+
+## [v2.3.0] - 2019-03-11
+
+### Added:
+- **[dnsprovider]** Add DNS Provider for ClouDNS.net
+- **[dnsprovider]** Add DNS Provider for Oracle Cloud
+
+### Changed:
+- **[cli]** Adds log when no renewal.
+- **[dnsprovider,lib]** Add a mechanism to wrap a PreCheckFunc
+- **[dnsprovider]** oraclecloud: better way to get private key.
+- **[dnsprovider]** exoscale: update library
+
+### Fixed:
+- **[dnsprovider]** OVH: Refresh zone after deleting challenge record
+- **[dnsprovider]** oraclecloud: ttl config and timeout 
+- **[dnsprovider]** hostingde: fix client fails if customer has no access to dns-groups
+- **[dnsprovider]** vscale: getting sub-domain
+- **[dnsprovider]** selectel: getting sub-domain
+- **[dnsprovider]** vscale: fix TXT records clean up
+- **[dnsprovider]** selectel: fix TXT records clean up
+
+## [v2.2.0] - 2019-02-08
+
+### Added:
+- **[dnsprovider]** Add support for Openstack Designate as a DNS provider
+- **[dnsprovider]** gcloud: Option to specify gcloud service account json by env as string
+- **[experimental feature]** Resolve CNAME when creating dns-01 challenge. To enable: set `LEGO_EXPERIMENTAL_CNAME_SUPPORT` to `true`.
+ 
+### Changed:
+- **[cli]** Applies Let’s Encrypt’s recommendation about renew. The option `--days` of the command `renew` has a new default value (`30`)
+- **[lib]** Uses a jittered exponential backoff
+
+### Fixed:
+- **[cli]** CLI and key type.
+- **[dnsprovider]** httpreq: Endpoint with path.
+- **[dnsprovider]** fastdns: Do not overwrite existing TXT records
+- Log wildcard domain correctly in validation
+
+## [v2.1.0] - 2019-01-24
+
+### Added:
+- **[dnsprovider]** Add support for zone.ee as a DNS provider.
+
+### Changed:
+- **[dnsprovider]** nifcloud: Change DNS base url.
+- **[dnsprovider]** gcloud: More detailed information about Google Cloud DNS.
+
+### Fixed:
+- **[lib]** fix: OCSP, set HTTP client.
+- **[dnsprovider]** alicloud: fix pagination.
+- **[dnsprovider]** namecheap: fix panic.
+
+## [v2.0.0] - 2019-01-09
+
+### Added:
+- **[cli,lib]** Option to disable the complete propagation Requirement
+- **[lib,cli]** Support non-ascii domain name (punnycode)
+- **[cli,lib]** Add configurable timeout when obtaining certificates
+- **[cli]** Archive revoked certificates
+- **[cli]** Add command to list certificates.
+- **[cli]** support for renew with CSR
+- **[cli]** add SAN on renew
+- **[lib]** Adds `Remove` for challenges
+- **[lib]** Add version to xenolf-acme in User-Agent.
+- **[dnsprovider]** The ability for a DNS provider to solve the challenge sequentially
+- **[dnsprovider]** Add DNS provider for &#34;HTTP request&#34;.
+- **[dnsprovider]** Add DNS Provider for Vscale
+- **[dnsprovider]** Add DNS Provider for TransIP
+- **[dnsprovider]** Add DNS Provider for inwx
+- **[dnsprovider]** alidns: add support to handle more than 20 domains
+
+### Changed:
+- **[lib]** Check all challenges in a predictable order
+- **[lib]** Poll authz URL instead of challenge URL
+- **[lib]** Check all nameservers in a predictable order
+- **[lib]** Logs every iteration of waiting for the propagation
+- **[cli]** `--http`: enable HTTP challenge **important**
+- **[cli]** `--http.port`: previously named `--http`
+- **[cli]** `--http.webroot`: previously named `--webroot`
+- **[cli]** `--http.memcached-host`: previously named `--memcached-host`
+- **[cli]** `--tls`: enable TLS challenge **important**
+- **[cli]** `--tls.port`:  previously named `--tls`
+- **[cli]** `--dns.resolvers`: previously named `--dns-resolvers`
+- **[cli]** the option `--days` of the command `renew` has default value (`15`)
+- **[dnsprovider]** gcloud: Use GCE_PROJECT for project always, if specified
+
+### Removed:
+- **[lib]** Remove `SetHTTP01Address`
+- **[lib]** Remove `SetTLSALPN01Address`
+- **[lib]** Remove `Exclude`
+- **[cli]** Remove `--exclude`, `-x` 
+
+### Fixed:
+- **[lib]** Fixes revocation for subdomains and non-ascii domains
+- **[lib]** Disable pending authorizations
+- **[dnsprovider]** transip: concurrent access to the API.
+- **[dnsprovider]** gcloud: fix for wildcard
+- **[dnsprovider]** Azure: Do not overwrite existing TXT records
+- **[dnsprovider]** fix: Cloudflare error.
+
+## [v1.2.0] - 2018-11-04
+
+### Added:
+- **[dnsprovider]** Add DNS Provider for ConoHa DNS
+- **[dnsprovider]** Add DNS Provider for MyDNS.jp
+- **[dnsprovider]** Add DNS Provider for Selectel
+
+### Fixed:
+- **[dnsprovider]** netcup: make unmarshalling of api-responses more lenient.
+
+### Changed:
+- **[dnsprovider]** aurora: change DNS client
+- **[dnsprovider]** azure: update auth to support instance metadata service
+- **[dnsprovider]** dnsmadeeasy: log response body on error
+- **[lib]** TLS-ALPN-01: Update idPeAcmeIdentifierV1, draft refs.
+- **[lib]** Do not send a JWS body when POSTing challenges.
+- **[lib]** Support POST-as-GET.
+
+## [v1.1.0] - 2018-10-16
+
+### Added:
+- **[lib]** TLS-ALPN-01 Challenge
+- **[cli]** Add filename parameter
+- **[dnsprovider]** Allow to configure TTL, interval and timeout
+- **[dnsprovider]** Add support for reading DNS provider setup from files
+- **[dnsprovider]** Add DNS Provider for ACME-DNS
+- **[dnsprovider]** Add DNS Provider for ALIYUN DNS
+- **[dnsprovider]** Add DNS Provider for DreamHost
+- **[dnsprovider]** Add DNS provider for hosting.de
+- **[dnsprovider]** Add DNS Provider for IIJ
+- **[dnsprovider]** Add DNS Provider for netcup
+- **[dnsprovider]** Add DNS Provider for NIFCLOUD DNS
+- **[dnsprovider]** Add DNS Provider for SAKURA Cloud
+- **[dnsprovider]** Add DNS Provider for Stackpath
+- **[dnsprovider]** Add DNS Provider for VegaDNS
+- **[dnsprovider]** exec: add EXEC_MODE=RAW support.
+- **[dnsprovider]** cloudflare: support for CF_API_KEY and CF_API_EMAIL
+
+### Fixed:
+- **[lib]** Don't trust identifiers order.
+- **[lib]** Fix missing issuer certificates from Let's Encrypt
+- **[dnsprovider]** duckdns: fix TXT record update url
+- **[dnsprovider]** duckdns: fix subsubdomain
+- **[dnsprovider]** gcloud: update findTxtRecords to use Name=fqdn and Type=TXT
+- **[dnsprovider]** lightsail: Fix Domain does not exist error
+- **[dnsprovider]** ns1: use the authoritative zone and not the domain name
+- **[dnsprovider]** ovh: check error to avoid panic due to nil client
+
+### Changed:
+- **[lib]** Submit all dns records up front, then validate serially
+
 ## [v1.0.0] - 2018-05-30
 
 ### Changed:
@@ -186,8 +624,8 @@
 ## [0.1.0] - 2015-12-03
 - Initial release
 
-[0.3.1]: https://github.com/xenolf/lego/compare/v0.3.0...v0.3.1
-[0.3.0]: https://github.com/xenolf/lego/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/xenolf/lego/compare/v0.1.1...v0.2.0
-[0.1.1]: https://github.com/xenolf/lego/compare/v0.1.0...v0.1.1
-[0.1.0]: https://github.com/xenolf/lego/tree/v0.1.0
+[0.3.1]: https://github.com/go-acme/lego/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/go-acme/lego/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/go-acme/lego/compare/v0.1.1...v0.2.0
+[0.1.1]: https://github.com/go-acme/lego/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/go-acme/lego/tree/v0.1.0
